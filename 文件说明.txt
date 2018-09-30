@@ -1,0 +1,7 @@
+文件说明：
+--base文件夹：源码
+--mybatis-encapsulation.jar：jar包
+--contants.properties：示例配置文件
+--pom.xml：我编写时使用的项目maven配置文件
+--ScenWorkCheckController.java：示例controller
+--SceneWorkCheckService.java：示例service

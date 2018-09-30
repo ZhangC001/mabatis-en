@@ -1,0 +1,388 @@
+一、使用配置
+	1、拷贝jar包或源码到项目中。
+	2、拷贝示例配置文件（contants.properties)到项目中，并修改为个人配置。
+	3、注册通用mapper（二种方式）：
+		xml配置方式，在spring配置xml中注册bean：
+			<bean id="currencyMapper" class="org.mybatis.spring.mapper.MapperFactoryBean">
+				<property name="mapperInterface" value="base.en.mybatis.common.dao.CurrencyMapper" />
+				<property name="sqlSessionFactory" 	ref="sqlSessionFactory" />
+			</bean>
+
+		java配置方式，在java配置文件中注册bean：
+		    @Bean
+		    public MapperFactoryBean currencyMapper(SqlSessionFactory sqlSessionFactory) {
+			MapperFactoryBean mapperFactoryBean = new MapperFactoryBean();
+			mapperFactoryBean.setMapperInterface(CurrencyMapper.class);
+			mapperFactoryBean.setSqlSessionFactory(sqlSessionFactory);
+			return mapperFactoryBean;
+		    }
+	4、配置PageHelper，参考PageHelper官方说明(https://pagehelper.github.io/docs/howtouse/)，下面提供两种最简化配置:
+		mybatis xml中：
+			<plugins>
+			    <plugin interceptor="com.github.pagehelper.PageInterceptor">
+			</plugin>
+		纯java方式配置，在注册sqlSessionFactory是配置分页：
+		    @Bean("sqlSessionFactory")
+		    public SqlSessionFactoryBean sqlSessionFactory(DataSource dataSource) throws IOException {
+			SqlSessionFactoryBean sqlSessionFactoryBean = new SqlSessionFactoryBean();
+			sqlSessionFactoryBean.setDataSource(dataSource);
+			
+			//分页符插件
+			PageInterceptor pageInterceptor = new PageInterceptor();
+			Properties properties = new Properties();
+			pageInterceptor.setProperties(properties);
+			sqlSessionFactoryBean.setPlugins(new Interceptor[]{pageInterceptor});
+
+			return  sqlSessionFactoryBean;
+		    }
+
+二、方法调用（参考类SceneWorkCheckService.java 与 SceneWorkCheckController.java）：
+
+	1、service 继承base.en.mybatis.common.service.BaseService<T>即可,T 数据表对应实体，baseService继承自base.en.mybatis.common.service.CommonService<T>：
+
+		@Service
+		public class SceneWorkCheckService extends BaseService<SceneWorkCheck> {
+
+		    /*使用自定义的字段与数据库列映射规则对象时通过构造函数注入，使用默认的规则，无需此方法
+		    public SceneWorkCheckService() {
+			this.setBeanRowMapper(new DefaultMapperMethodRule());
+		    }*/
+
+
+		}
+
+		默认的转换规则实现类为base.en.mybatis.common.uitl.DefaultMapperMethodRule，自定义转换规则对象实现base.en.mybatis.common.uitl.MapperMethodRule，包含三个方法：
+			
+			--String columnFmt(Field field) 传入Filed对象返回表中对应数据列，默认转换规则实现（小驼峰转下划线firstName -> FirstName）：
+				    @Override
+				    public String columnFmt(Field field) {
+					return CommonUtils.underscore(field.getName());
+				    }
+			--public FieldInfo fieldInfoFmt(Field field, Class entity) 使用Filed 与 实体calss对象构建构建出包含setter方法和参数类型的对象：
+				FiledInfo 包含属性：
+					    /**  属性的Filed对象 */
+					    private Field field;
+
+					    /**  属性对应的表列名 */
+					    private String column;
+
+					    /**  属性名 */
+					    private String pname;
+
+					    /** 属性类型 */
+					    private Class pclass;
+
+					    /** setter方法*/
+					    private Method setMethod;
+
+					    /** getter方法 */
+					    private Method getMethod;
+
+				默认转换规则实现：
+					   @Override
+					    public FieldInfo fieldInfoFmt(Field field, Class entity) {
+						String mName = field.getName().substring(0,1).toUpperCase() + field.getName().substring(1);
+						Method setMethod = null;
+						Method getMethod = null;
+						try {
+						    setMethod = entity.getMethod("set"+mName, field.getType());
+						    getMethod = entity.getMethod("get"+mName);
+						    field.setAccessible(true);
+						    return new FieldInfo(field,columnFmt(field),field.getName(),field.getType(),setMethod,getMethod);
+						} catch (NoSuchMethodException e) {
+						    e.printStackTrace();
+						   return null;
+						}
+					    }
+
+			--public String tableNameFmt(Class entity) 实体类名到表名的转换，默认转换规则实现（大驼峰转下划线UserInfo -> USER_INFO）：
+					    @Override
+					    public String tableNameFmt(Class entity) {
+						String cname = entity.getSimpleName();
+						cname = cname.substring(0,1).toLowerCase()+cname.substring(1);
+						return CommonUtils.underscore(cname);
+					    }
+				
+	
+		注：此处根据个人项目情况，直接使用的驼峰与下划线的转换，需要编写自己实现的朋友，可以考虑使用注解来实现，能够实现表名与列明规则不统一的情况。
+
+
+
+
+	2、内部方法：
+		
+		继承自CommonService<T>属性和方法：
+			
+			--protected Class <T> entityClass 实体对象泛型T的class对象
+
+			--protected BeanRowMapper<T> beanRowMapper 转换规则实现
+
+			--protected String tableName 根据转换规则实现类得到的表名
+
+			--public Map<String, Object> uniqueQuery(String sql) 单挑数据查询，返回Map
+
+			--public List<Map<String, Object>> listQuery(String sql) 行多条挑数据查询，返回Map的list集合
+
+			--public String stringQuery(String sql) 单条单列数据查询，返回String对象
+
+			--public Map<String, Object> callableBatch(Map<String, Object> map) 执行存储过程，map必须包含sql，执行返后的返回数据从map中获取，示例：
+						Map<String, Object> map = new HashMap<>();
+						map.put("param1", 1);
+						map.put("param2", 2);
+						map.put("sql","test_pro(#{param1},#{param2},#{p3,mode=OUT,jdbcType=INTEGER})");
+						sceneWorkCheckService.callableBatch(map);
+						map.get("p3");
+
+			--public List<T> listEntityQuery(String sql) 返回对象list
+
+			--public T uniqueEntityQuery(String sql) 返回单个对象
+
+			--public int deleteBatch(String sql) 执行删除语句
+
+			--public int updateBatch(String sql) 执行update语句
+
+			--public int insertBatch(String sql) 执行insert语句
+
+			--public int save(T entity)  保存对象到数据库
+
+			--public int saveOrUpdate(T entity) 保存或编辑对象数据，通过主键判断，主键有值则为编辑
+
+			--public Map<String, String> columnMapper()  获取缓存的属性 - 表列映射关系<属性名，表列名>
+
+			--public Map<String, FieldInfo>fieldMapper() 获取映射关系缓存 <表列名，包含映射和Filed等信息的FieldInfo对象>
+					FiledInfo 包含属性：
+						    /**  属性的Filed对象 */
+						    private Field field;
+
+						    /**  属性对应的表列名 */
+						    private String column;
+
+						    /**  属性名 */
+						    private String pname;
+
+						    /** 属性类型 */
+						    private Class pclass;
+
+						    /** setter方法*/
+						    private Method setMethod;
+
+						    /** getter方法 */
+						    private Method getMethod;
+
+		
+		自身方法：
+			
+			--public Map<String, Object> uniqueQuery(QueryObj queryObj) 使用QueryObj单条数据查询，返回Map
+
+			--public List<Map<String, Object>> listQuery(QueryObj queryObj) 使用QueryObj多条数据查询，返回Map的List
+
+			--public T uniqueEntityQuery(QueryObj queryObj) 使用QueryObj单条数据查询，返回数据对象
+
+			--public List<T> listEntityQuery(QueryObj queryObj) 使用QueryObj多条数据查询，返回对象List
+
+			--public T uniqueIdQuery(Object id) 使用主键查询返回对象
+
+			--public int deleteById(Object id) 通过主键删除 数据对象
+
+			--public Long countQuery(QueryObj queryObj)  使用QueryObj执行条数查询
+
+			--public int updateBatch(QueryObj queryObj) 使用QueryObj 执行update语句
+
+			-- public PageInfo<T> getPageInfo(Integer pageNum, Integer pageSize, QueryObj queryObj) 使用PageHelper执行PageInfo对象查询
+
+
+	3、QueryObj 类使用说明：
+		base.en.mybatis.common.QueryObj ： 用于根据配置关系，生成完整sql语句
+			
+			常用sql字符定义：	
+
+				public static String NBSP = " ";
+
+				public static String NULL = "null";
+
+				public static String EQ = "="; 
+
+				public static String NOTEQ = "!=";
+
+				public static String GT = ">";
+
+				public static  String LT = "<";
+
+				public static String GTEQ = ">=";
+
+				public static String LTEQ = "<=";
+
+				public static String LIKE = "like '%val%'"; 双边like
+ 
+				public static String LLIKE = "like '%val'"; 左like
+
+				public static String RLIKE = "like 'val%'"; 有like
+
+				public static String IN = "in (val)";
+
+				public static String NOTIN = "not in (val)";
+
+				public static String IS =  "is";
+
+				public static String ISNOT = "is not";
+
+				public static String DESC = "desc";
+
+				public static String ASC = "asc";
+
+		 构造：
+			--public QueryObj()
+
+			--public QueryObj(Boolean transference)   transference：是否需要对放入的数据列进行转换，将对需要处理的属性进行属性->表列名的转换，此时需要使用
+				public QueryObj columnMapper(Map<String, String> columnMapper) 方法设置映射关系，Map<属性名，表列名>, 默认为true，在直接使用表列名时，使用此构造器，
+				设置为false, new QueryObj(fasle)
+			
+		常用方法：
+			
+			--public QueryObj setTable(String table)  设置表名
+
+			--public String getTable() 获取表名
+
+			--public Boolean isTransference() 获取转换标记
+
+			--public void setTransference(Boolean transference) 设置转换标记
+
+			--public QueryObj columnMapper(Map<String, String> columnMapper) 设置映射关系，Map<属性名，表列名>
+
+			-- public QueryObj pushQuery(String key, Object value, String eq) 添加where条件
+					String key 实体属性或者表字段，同一个QueryObj中建议统一，如果不同意，在进行转换的时候，如果无匹配项，将保留原值
+					Object value   条件值
+					String eq  对应关系，请使用QueryObj 中定义好的关系属性，防止组装出错
+
+			--public QueryObj pushQuery(String key, Object value, String eq, Boolean mark) 添加where条件
+					String key 实体属性或者表字段，同一个QueryObj中建议统一，如果不同意，在进行转换的时候，如果无匹配项，将保留原值
+					Object value   条件值
+					String eq  对应关系，请使用QueryObj 中定义好的关系属性，防止组装出错
+					Boolean mark 是否需要在组装时，在两端添加单引号
+
+			--public QueryObj pushOrder(String filed,String order) 添加排序条件
+					String filed   实体属性或者表字段，同一个QueryObj中建议统一，如果不同意，在进行转换的时候，如果无匹配项，将保留原值
+					String order   排序方式，请使用QueryObj 中定义好的关系属性，防止组装出错
+
+			--public QueryObj pushGroup(String filed) 添加分组条件
+					String filed   实体属性或者表字段，同一个QueryObj中建议统一，如果不同意，在进行转换的时候，如果无匹配项，将保留原值
+			
+			--public QueryObj pushField(String filed) 添加查询的数据列
+					String filed   实体属性或者表字段，同一个QueryObj中建议统一，如果不同意，在进行转换的时候，如果无匹配项，将保留原值，如果没有设置查询列，将查询所有列
+
+			--public QueryObj pushEntity(String filed,Object value) 添加update或者insert语句的列-值对应
+					String filed   实体属性或者表字段，同一个QueryObj中建议统一，如果不同意，在进行转换的时候，如果无匹配项，将保留原值
+					Object value   对应的值
+
+			--public QueryObj pushEntity(String filed,Object order, Boolean mark) 添加update或者insert语句的列-值对应
+					String filed   实体属性或者表字段，同一个QueryObj中建议统一，如果不同意，在进行转换的时候，如果无匹配项，将保留原值
+					Object value   对应的值
+					Boolean mark 是否需要在组装时，在两端添加单引号	
+
+			--public QueryObj transferenceField()  进行属性->表列的转换，将所有设置的属性字段按照设置的映射集合进行一次转换，无匹配项的保留原值
+					
+			--public String toQuerySql()  组装输出select语句
+
+			--public String completeSql(String sql) 完善sql，并输出，只会添加where 条件， group by 条件 与 order 不要条件
+
+			--public String toUpdateSql() 组装输出update语句
+
+			--public String toInsertSql() 组装输出insert语句
+
+			--public String toDeleteSql() 组装输出delete语句
+
+			--public String toGroup()  组装输出group by 语句段
+
+			--public String toOrder() 组装order 语句段
+
+			--public String toQuery() 组装where 语句段
+
+			--public String toUpdate() 组装update 列-值关系 语句段
+		
+	4、使用示例：
+		
+		QueryObj 使用示例：
+			
+			产生insert语句：
+				QueryObj query = new QueryObj(false);
+				query.pushEntity("id", 1)
+					.pushEntity("createtime", new Date())
+					.pushEntity("firstname", "aaa", true)
+					.setTable("user");
+				String insertSql = query.toInsertSql();
+				
+			产生update语句：				
+				QueryObj query = new QueryObj(false);
+				query.pushEntity("CHECK_TIME", new Date())
+					.pushEntity("firstname", "aaa", true)
+					.pushQuery("id",  1, QueryObj.EQ)
+					.setTable("user");
+				String insertSql = query.toUpdateSql();
+			
+			产生查询语句：
+				QueryObj query = new QueryObj(false);
+				query.pushField("firstname")
+					.pushField("age")
+					.pushQuery("id", 10, QueryObj.GT)
+					.pushQuery("firstname", "aaa", QueryObj.LIKE)
+					.pushGroup("firstname")
+					.pushGroup("age")
+					.pushOrder("id", QueryObj.DESC);
+				String querySql = query.toQuerySql();
+			
+			完善sql：
+				String sql = "select * from user ";
+				QueryObj query = new QueryObj(false);
+				query.pushQuery("id", 10, QueryObj.GT)
+					.pushQuery("firstname", "aaa", QueryObj.LIKE)
+					.pushGroup("firstname")
+					.pushGroup("age")
+					.pushOrder("id", QueryObj.DESC);
+				String querySql = query.completeSql(sql);
+			
+			进行列转换的组装：
+				注：需要转换时，可以通过BeanRowMapper 类来得到属性-表列额映射关系，默认使用DefaultMapperMethodRule，使用自行实现了MapperMethodRule的规则时，使用new BeanRowMapper<>(Class clazz, MapperMethodRule rule)构造，
+				内部方法说明，参考1
+			        BeanRowMapper<User> mapper = new BeanRowMapper<>(User.class);
+				QueryObj query = new QueryObj();
+				query.pushQuery("id", 10, QueryObj.GT)
+					.pushQuery("firstname", "aaa", QueryObj.LIKE)
+					.pushOrder("id", QueryObj.DESC)
+					.setTable(mapper.getTableName())
+					.columnMapper(mapper.getColumnMapper())
+					.transferenceField();
+				String querySql = query.toQuerySql();
+
+
+		
+		BaseService使用示例：
+			请参考：类SceneWorkCheckService.java 与 SceneWorkCheckController.java
+			
+		
+	
+
+
+	5、其它类说明：
+		base.en.mybatis.common.service :
+
+			--CommonService<T>	sql查询与数据对象转换
+			--BaseService<T> extends CommonService<T>	使用QueryObj的数据查询	
+
+		base.en.mybatis.common.entity：
+			--Contants	读取配置文件
+			--FieldInfo	映射关系对象
+			--QueryObj	sql组装类
+
+		base.en.mybatis.common.dao :
+
+			--CurrencyMapper.java  通用mapper
+			--CurrencyMapper.xml  通用xml文件
+
+		base.en.mybatis.common.util：
+			--BeanRowMapper		map数据到实体对象装换类
+			--CommonUtils		工具类
+			--DefaultMapperMethodRule implements MapperMethodRule	默认的转换规则实现类
+			--MapperMethodRule	转换规则接口
+	
+				
+	6、开发使用JDK 1.7
